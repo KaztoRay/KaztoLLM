@@ -1,83 +1,65 @@
-import os
 import torch
 from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM, 
-    AutoTokenizer, 
-    TrainingArguments, 
-    Trainer,
-    DataCollatorForLanguageModeling
-)
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from peft import LoraConfig, get_peft_model
 
-# 1. 설정 및 경로
-MODEL_ID = "meta-llama/Meta-Llama-3-8B" # 또는 13B (64GB RAM이므로 시도 가능)
-DATASET_PATH = "security_dataset.jsonl" # 준비한 방대한 데이터 파일
-OUTPUT_DIR = "./joon-security-llm-v2"
+# 1. 모델 설정
+MODEL_ID = "meta-llama/Meta-Llama-3-8B"
+DATASET_PATH = "security_dataset.jsonl"
 
-# 2. 토크나이저 및 모델 로드
+# 2. 로드 및 최적화
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 tokenizer.pad_token = tokenizer.eos_token
 
+# 연탄맥 CPU를 위해 float32 사용 (비표준 GPU 가속 제외)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    device_map="cpu", # 연탄맥 CPU 활용
+    device_map="cpu",
     torch_dtype=torch.float32,
     low_cpu_mem_usage=True
 )
 
-# 3. LoRA 설정 (더 깊은 학습을 위해 rank를 높임)
-# r=16 이상으로 설정하여 복잡한 보안 논리 학습
+# 3. LoRA 설정 (보안 지식 주입을 위한 Rank 16)
 config = LoraConfig(
-    r=16, 
+    r=16,
     lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], # 더 많은 레이어 학습
-    lora_dropout=0.1,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
 )
 model = get_peft_model(model, config)
 
-# 4. 데이터셋 로드 및 전처리
-def formatting_prompts_func(examples):
-    instructions = examples["instruction"]
-    contexts = examples.get("context", "")
-    responses = examples["response"]
-    texts = []
-    for instruction, context, response in zip(instructions, contexts, responses):
-        text = f"### Instruction:\n{instruction}\n\n### Context:\n{context}\n\n### Response:\n{response}</s>"
-        texts.append(text)
-    return {"text": texts}
-
+# 4. 데이터셋 로드
 dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
-dataset = dataset.map(formatting_prompts_func, batched=True)
-dataset = dataset.map(lambda samples: tokenizer(samples["text"], truncation=True, padding="max_length", max_length=512), batched=True)
 
-# 5. 하이퍼파라미터 설정 (CPU 학습 최적화)
+def tokenize_function(examples):
+    # 보안 프롬프트 템플릿
+    texts = [f"### 분석 요청: {i}\n### 답변: {r}</s>" for i, r in zip(examples['instruction'], examples['response'])]
+    return tokenizer(texts, truncation=True, padding="max_length", max_length=512)
+
+tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
+
+# 5. 학습 인자 (64GB RAM을 이용한 대량 처리)
 training_args = TrainingArguments(
-    output_dir=OUTPUT_DIR,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=8, # 실제 배치는 16 효과 (RAM 활용)
-    num_train_epochs=5,            # 반복 학습으로 지식 각인
+    output_dir="./kazto-security-v3",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=16, # 메모리 부하를 줄이면서 대량 학습 효과
+    num_train_epochs=5,
     learning_rate=1e-4,
+    save_strategy="epoch",
     logging_steps=5,
-    save_strategy="steps",
-    save_steps=50,
-    use_cpu=True,
+    use_cpu=True, # 강제 CPU 모드
     report_to="none"
 )
 
-# 6. 트레이너 실행
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=dataset,
+    train_dataset=tokenized_dataset,
     data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
 )
 
-print(f"--- 보안 통합 학습 시작 (분야: Web, System, DeFi, IoT, Game 등) ---")
+print("🔒 보안 전문가 모델 통합 학습 시작...")
 trainer.train()
-
-# 7. 최종 저장
-model.save_pretrained("./final_security_expert_adapter")
-print("학습이 완료되었습니다. 어댑터가 저장되었습니다.")
+model.save_pretrained("./final_expert_adapter")
