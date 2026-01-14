@@ -1,0 +1,4 @@
+{"instruction": "Web Hacking: SQL Injection을 이용한 데이터베이스 탈취 프로세스를 설명하라.", "context": "Target: PHP/MySQL environment", "response": "1. Entry point 확인... 2. Order by를 통한 컬럼 수 확인... 3. Union select를 이용한 데이터 추출..."}
+{"instruction": "DeFi/Blockchain: Reentrancy 공격의 원리와 방어 코드를 제시하라.", "context": "Solidity 0.8.x", "response": "원리: External call이 완료되기 전 상태 변수를 업데이트하지 않아 발생... 방어: Checks-Effects-Interactions 패턴 적용."}
+{"instruction": "System Hacking: x64 환경에서 ROP(Return Oriented Programming) 체인을 구성하는 방법은?", "context": "Linux, ASLR enabled", "response": "1. Gadget 검색 (pop rdi; ret 등)... 2. libc base 주소 leak... 3. system('/bin/sh') 호출용 스택 프레임 구성..."}
+{"instruction": "IoT/Embedded: UART 인터페이스를 통한 쉘 획득 과정을 설명하라.", "context": "Hardware hacking", "response": "1. PCB에서 TX/RX/GND 핀 식별... 2. Baud rate 매칭... 3. 부트로더 인터럽트를 통한 콘솔 진입..."}
