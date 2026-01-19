@@ -1,58 +1,75 @@
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
-from peft import LoraConfig, get_peft_model
+from transformers import (
+    
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
+    BitsAndBytesConfig, 
+    TrainingArguments, 
+    Trainer, 
+    DataCollatorForLanguageModeling
+    
+)
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
-# 1. 모델 설정
-MODEL_ID = "meta-llama/Meta-Llama-3-8B"
-DATASET_PATH = "security_dataset.jsonl"
+# --- 설정 ---
+MODEL_ID = "mistralai/Mistral-7B-v0.3"
+OUTPUT_DIR = "./kazto-security"
 
-# 2. 로드 및 최적화
+print("🔍 연탄맥 자원 최적화 모드로 모델 로드 중...")
+
+# 1. 8비트 양자화 설정 (64GB RAM을 고려한 안정적 설정)
+bnb_config = BitsAndBytesConfig(
+    load_in_8bit=True,
+    llm_int8_threshold=6.0,
+    llm_int8_has_fp16_weight=False,
+)
+
+# 2. 모델 및 토크나이저 로드
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 tokenizer.pad_token = tokenizer.eos_token
 
-# 연탄맥 CPU를 위해 float32 사용 (비표준 GPU 가속 제외)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    device_map="cpu",
-    torch_dtype=torch.float32,
+    quantization_config=bnb_config,
+    device_map="auto", # 연탄맥의 CPU/GPU 자원 자동 배분
+    torch_dtype=torch.float16,
     low_cpu_mem_usage=True
 )
 
-# 3. LoRA 설정 (보안 지식 주입을 위한 Rank 16)
-config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+# 3. LoRA 설정 (보안 지식 주입)
+model = prepare_model_for_kbit_training(model)
+lora_config = LoraConfig(
+    r=16, lora_alpha=32,
+    target_modules=["q_proj", "v_proj"],
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
 )
-model = get_peft_model(model, config)
+model = get_peft_model(model, lora_config)
 
-# 4. 데이터셋 로드
-dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
+# 4. 데이터셋 로드 및 토큰화
+dataset = load_dataset("json", data_files="security_dataset_v2.jsonl", split="train")
+def tokenize_func(examples):
+    text = f"<s>[INST] {examples['instruction']} [/INST] {examples['response']} </s>"
+    return tokenizer(text, truncation=True, padding="max_length", max_length=512)
 
-def tokenize_function(examples):
-    # 보안 프롬프트 템플릿
-    texts = [f"### 분석 요청: {i}\n### 답변: {r}</s>" for i, r in zip(examples['instruction'], examples['response'])]
-    return tokenizer(texts, truncation=True, padding="max_length", max_length=512)
+tokenized_dataset = dataset.map(tokenize_func, remove_columns=dataset.column_names)
 
-tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
-
-# 5. 학습 인자 (64GB RAM을 이용한 대량 처리)
+# 5. 연탄맥 맞춤형 학습 인자
 training_args = TrainingArguments(
-    output_dir="./kazto-security-v3",
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=16, # 메모리 부하를 줄이면서 대량 학습 효과
-    num_train_epochs=5,
-    learning_rate=1e-4,
+    output_dir=OUTPUT_DIR,
+    per_device_train_batch_size=4, # 64GB RAM이므로 배치 사이즈를 넉넉히 잡음
+    gradient_accumulation_steps=4,
+    num_train_epochs=3,
+    learning_rate=2e-4,
+    fp16=True,
+    logging_steps=1,
     save_strategy="epoch",
-    logging_steps=5,
-    use_cpu=True, # 강제 CPU 모드
     report_to="none"
 )
 
+# 6. 학습 시작
 trainer = Trainer(
     model=model,
     args=training_args,
@@ -60,6 +77,7 @@ trainer = Trainer(
     data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
 )
 
-print("🔒 보안 전문가 모델 통합 학습 시작...")
+print("🔒 [KaztoLLM] 학습을 시작합니다...")
 trainer.train()
-model.save_pretrained("./final_expert_adapter")
+model.save_pretrained("./final_security_adapter")
+print("✅ 어댑터 저장 완료!")
